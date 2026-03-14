@@ -1,0 +1,10 @@
+[package]
+name = "bevy-ui-editor"
+version = "0.1.0"
+edition = "2021"
+description = "A visual UI editor for the Bevy game engine"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+bevy = "0.18.1"
+bevy_egui = "0.39.1"
