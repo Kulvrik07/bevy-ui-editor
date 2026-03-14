@@ -4,7 +4,7 @@ pub mod toolbar;
 pub mod viewport;
 
 use bevy::prelude::*;
-use bevy_egui::{EguiPlugin, EguiPostUpdateSet};
+use bevy_egui::EguiPlugin;
 
 use crate::model::{
     EditorChanged, EditorDocument, EditorIdCounter, EditorSelection, ShowExportWindow,
@@ -34,9 +34,11 @@ impl Plugin for EditorPlugin {
             .init_resource::<EditorIdCounter>()
             .init_resource::<EditorChanged>()
             .init_resource::<ShowExportWindow>()
-            // Systems — run in PostUpdate before EndPass so egui context is ready
+            // Editor UI systems run in Update schedule.
+            // bevy_egui calls begin_pass in PreUpdate and end_pass in PostUpdate,
+            // so Update is the correct place to draw egui UI.
             .add_systems(
-                PostUpdate,
+                Update,
                 (
                     toolbar_system,
                     hierarchy_system,
@@ -44,8 +46,7 @@ impl Plugin for EditorPlugin {
                     export_window_system,
                     viewport_sync_system,
                 )
-                    .chain()
-                    .before(EguiPostUpdateSet::EndPass),
+                    .chain(),
             )
             // Startup: spawn camera
             .add_systems(Startup, setup_camera);
