@@ -1,3 +1,3 @@
-pub mod ui_node;
+pub mod scene_node;
 
-pub use ui_node::*;
+pub use scene_node::*;
