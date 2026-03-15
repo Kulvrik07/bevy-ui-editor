@@ -302,7 +302,10 @@ pub fn viewport_interact_system(
                         let pos = Vec3::from(node.translation);
                         let node_scale = Vec3::from(node.scale);
                         let axis_len = node_scale.max_element().max(0.5) * 1.5 + 0.8;
-                        let handle_radius = 0.25;
+                        // Scale hit radii with camera distance for consistent screen-space feel
+                        let cam_dist = (ray.origin - pos).length().max(1.0);
+                        let dist_scale = (cam_dist * 0.04).clamp(0.8, 3.0);
+                        let handle_radius = 0.45 * dist_scale;
 
                         match editor.transform_mode {
                             TransformMode::Translate | TransformMode::Scale => {
@@ -323,7 +326,7 @@ pub fn viewport_interact_system(
                                 }
                                 // Also test along the axis lines (thin cylinder approximation via multiple spheres)
                                 if clicked_axis.is_none() {
-                                    let line_radius = 0.12;
+                                    let line_radius = 0.25 * dist_scale;
                                     let axes = [
                                         (Vec3::X, DragAxis::X),
                                         (Vec3::Y, DragAxis::Y),
@@ -331,8 +334,8 @@ pub fn viewport_interact_system(
                                     ];
                                     let mut best_line_dist = f32::MAX;
                                     for (dir, axis) in &axes {
-                                        for i in 1..=8 {
-                                            let t = i as f32 / 8.0 * axis_len;
+                                        for i in 1..=16 {
+                                            let t = i as f32 / 16.0 * axis_len;
                                             let sample = pos + *dir * t;
                                             if let Some(d) = ray_sphere_intersect(ray.origin, ray.direction.into(), sample, line_radius) {
                                                 if d < best_line_dist {
@@ -347,8 +350,8 @@ pub fn viewport_interact_system(
                             TransformMode::Rotate => {
                                 // Test clicks near the rotation circles
                                 let ring_r = axis_len * 0.7;
-                                let ring_thickness = 0.18;
-                                let ring_samples = 24;
+                                let ring_thickness = 0.35 * dist_scale;
+                                let ring_samples = 48;
                                 let normals: [(Vec3, Vec3, DragAxis); 3] = [
                                     (Vec3::Y, Vec3::Z, DragAxis::X), // YZ circle → rotate X
                                     (Vec3::X, Vec3::Z, DragAxis::Y), // XZ circle → rotate Y
@@ -373,7 +376,7 @@ pub fn viewport_interact_system(
 
                         // Also test center for "all axes" drag
                         if clicked_axis.is_none() {
-                            if let Some(_) = ray_sphere_intersect(ray.origin, ray.direction.into(), pos, handle_radius * 1.5) {
+                            if let Some(_) = ray_sphere_intersect(ray.origin, ray.direction.into(), pos, handle_radius * 2.0) {
                                 clicked_axis = Some(DragAxis::All);
                             }
                         }
@@ -435,6 +438,9 @@ pub fn viewport_interact_system(
             }
 
             let sensitivity = orbit.distance * 0.003;
+            let snap_t = if editor.snap_enabled { editor.snap_translate } else { 0.0 };
+            let snap_r = if editor.snap_enabled { editor.snap_rotate } else { 0.0 };
+            let snap_s = if editor.snap_enabled { editor.snap_scale } else { 0.0 };
 
             if let Some(node) = doc.find_node_mut(sel) {
                 let pos = Vec3::from(node.translation);
@@ -445,16 +451,19 @@ pub fn viewport_interact_system(
                             Some(DragAxis::X) => {
                                 let delta = project_mouse_to_axis(camera, cam_global, pos, Vec3::X, mouse_delta, sensitivity);
                                 node.translation[0] += delta;
+                                if snap_t > 0.0 { node.translation[0] = snap_value(node.translation[0], snap_t); }
                                 changed.dirty = true;
                             }
                             Some(DragAxis::Y) => {
                                 let delta = project_mouse_to_axis(camera, cam_global, pos, Vec3::Y, mouse_delta, sensitivity);
                                 node.translation[1] += delta;
+                                if snap_t > 0.0 { node.translation[1] = snap_value(node.translation[1], snap_t); }
                                 changed.dirty = true;
                             }
                             Some(DragAxis::Z) => {
                                 let delta = project_mouse_to_axis(camera, cam_global, pos, Vec3::Z, mouse_delta, sensitivity);
                                 node.translation[2] += delta;
+                                if snap_t > 0.0 { node.translation[2] = snap_value(node.translation[2], snap_t); }
                                 changed.dirty = true;
                             }
                             _ => {
@@ -465,6 +474,11 @@ pub fn viewport_interact_system(
                                 node.translation[0] += world_delta.x;
                                 node.translation[1] += world_delta.y;
                                 node.translation[2] += world_delta.z;
+                                if snap_t > 0.0 {
+                                    node.translation[0] = snap_value(node.translation[0], snap_t);
+                                    node.translation[1] = snap_value(node.translation[1], snap_t);
+                                    node.translation[2] = snap_value(node.translation[2], snap_t);
+                                }
                                 changed.dirty = true;
                             }
                         }
@@ -473,19 +487,26 @@ pub fn viewport_interact_system(
                         match drag.axis {
                             Some(DragAxis::X) => {
                                 node.rotation_euler[0] += mouse_delta.y * 0.5;
+                                if snap_r > 0.0 { node.rotation_euler[0] = snap_value(node.rotation_euler[0], snap_r); }
                                 changed.dirty = true;
                             }
                             Some(DragAxis::Y) => {
                                 node.rotation_euler[1] += mouse_delta.x * 0.5;
+                                if snap_r > 0.0 { node.rotation_euler[1] = snap_value(node.rotation_euler[1], snap_r); }
                                 changed.dirty = true;
                             }
                             Some(DragAxis::Z) => {
                                 node.rotation_euler[2] += mouse_delta.x * 0.5;
+                                if snap_r > 0.0 { node.rotation_euler[2] = snap_value(node.rotation_euler[2], snap_r); }
                                 changed.dirty = true;
                             }
                             _ => {
                                 node.rotation_euler[1] += mouse_delta.x * 0.5;
                                 node.rotation_euler[0] += mouse_delta.y * 0.5;
+                                if snap_r > 0.0 {
+                                    node.rotation_euler[0] = snap_value(node.rotation_euler[0], snap_r);
+                                    node.rotation_euler[1] = snap_value(node.rotation_euler[1], snap_r);
+                                }
                                 changed.dirty = true;
                             }
                         }
@@ -494,14 +515,17 @@ pub fn viewport_interact_system(
                         match drag.axis {
                             Some(DragAxis::X) => {
                                 node.scale[0] = (node.scale[0] + mouse_delta.x * 0.005).max(0.01);
+                                if snap_s > 0.0 { node.scale[0] = snap_value(node.scale[0], snap_s).max(0.01); }
                                 changed.dirty = true;
                             }
                             Some(DragAxis::Y) => {
                                 node.scale[1] = (node.scale[1] - mouse_delta.y * 0.005).max(0.01);
+                                if snap_s > 0.0 { node.scale[1] = snap_value(node.scale[1], snap_s).max(0.01); }
                                 changed.dirty = true;
                             }
                             Some(DragAxis::Z) => {
                                 node.scale[2] = (node.scale[2] + mouse_delta.x * 0.005).max(0.01);
+                                if snap_s > 0.0 { node.scale[2] = snap_value(node.scale[2], snap_s).max(0.01); }
                                 changed.dirty = true;
                             }
                             _ => {
@@ -509,6 +533,11 @@ pub fn viewport_interact_system(
                                 node.scale[0] = (node.scale[0] + scale_delta).max(0.01);
                                 node.scale[1] = (node.scale[1] + scale_delta).max(0.01);
                                 node.scale[2] = (node.scale[2] + scale_delta).max(0.01);
+                                if snap_s > 0.0 {
+                                    node.scale[0] = snap_value(node.scale[0], snap_s).max(0.01);
+                                    node.scale[1] = snap_value(node.scale[1], snap_s).max(0.01);
+                                    node.scale[2] = snap_value(node.scale[2], snap_s).max(0.01);
+                                }
                                 changed.dirty = true;
                             }
                         }
@@ -572,6 +601,19 @@ fn project_mouse_to_axis(
     projected * sensitivity
 }
 
+fn snap_value(v: f32, grid: f32) -> f32 {
+    (v / grid).round() * grid
+}
+
+fn reassign_ids_recursive(node: &mut SceneNode, base: u64) {
+    let mut offset = 1u64;
+    for child in &mut node.children {
+        child.id = base.wrapping_add(offset * 100);
+        reassign_ids_recursive(child, child.id);
+        offset += 1;
+    }
+}
+
 // ─── Pick radius helper ──────────────────────────────────────────────────────
 
 fn get_pick_radius(doc: &SceneDocument, id: u64) -> f32 {
@@ -589,6 +631,12 @@ fn get_pick_radius(doc: &SceneDocument, id: u64) -> f32 {
                 s[0].max(s[1]).max(s[2]) * 0.6
             }
             SceneNodeKind::Light(_) => 0.5,
+            SceneNodeKind::Model(_) => {
+                let s = node.scale;
+                s[0].max(s[1]).max(s[2]) * 1.0
+            }
+            SceneNodeKind::Camera => 0.4,
+            SceneNodeKind::AudioSource(_) => 0.4,
         }
     } else {
         0.5
@@ -630,6 +678,28 @@ fn mesh_for_primitive(meshes: &mut ResMut<Assets<Mesh>>, primitive: &ScenePrimit
     }
 }
 
+fn material_for_node(materials: &mut ResMut<Assets<StandardMaterial>>, node: &SceneNode) -> Handle<StandardMaterial> {
+    use crate::model::SceneAlphaMode;
+    let [r, g, b, a] = node.color;
+    let [er, eg, eb, ea] = node.emissive;
+    let alpha_mode = match node.alpha_mode {
+        SceneAlphaMode::Opaque => AlphaMode::Opaque,
+        SceneAlphaMode::Blend => AlphaMode::Blend,
+        SceneAlphaMode::Mask => AlphaMode::Mask(node.alpha_cutoff),
+        SceneAlphaMode::AlphaToCoverage => AlphaMode::AlphaToCoverage,
+    };
+    materials.add(StandardMaterial {
+        base_color: Color::srgba(r, g, b, a),
+        metallic: node.metallic,
+        perceptual_roughness: node.roughness,
+        emissive: LinearRgba::new(er * 5.0, eg * 5.0, eb * 5.0, ea),
+        unlit: node.unlit,
+        double_sided: node.double_sided,
+        alpha_mode,
+        ..default()
+    })
+}
+
 // ─── Scene sync ───────────────────────────────────────────────────────────────
 
 pub fn scene_sync_system(
@@ -640,6 +710,8 @@ pub fn scene_sync_system(
     document: Res<SceneDocument>,
     selection: Res<SceneSelection>,
     existing: Query<Entity, With<SceneRoot>>,
+    asset_server: Res<AssetServer>,
+    editor: Res<EditorState>,
 ) {
     if !changed.dirty {
         return;
@@ -651,7 +723,7 @@ pub fn scene_sync_system(
     }
 
     for node in &document.nodes {
-        spawn_scene_node(&mut commands, &mut meshes, &mut materials, node, selection.selected);
+        spawn_scene_node(&mut commands, &mut meshes, &mut materials, node, selection.selected, &asset_server, editor.play_mode);
     }
 }
 
@@ -661,6 +733,8 @@ fn spawn_scene_node(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     node: &SceneNode,
     selected: Option<u64>,
+    asset_server: &Res<AssetServer>,
+    play_mode: bool,
 ) {
     let [rx, ry, rz] = node.rotation_euler;
     let rotation = Quat::from_euler(
@@ -691,23 +765,14 @@ fn spawn_scene_node(
             ));
             let entity_id = ec.id();
             for child in &node.children {
-                spawn_scene_child(commands, meshes, materials, child, entity_id, selected);
+                spawn_scene_child(commands, meshes, materials, child, entity_id, selected, asset_server, play_mode);
             }
         }
         SceneNodeKind::Mesh(primitive) => {
             let mesh_handle = mesh_for_primitive(meshes, primitive);
+            let mat = material_for_node(materials, node);
 
-            let [r, g, b, a] = node.color;
-            let [er, eg, eb, ea] = node.emissive;
-            let mat = materials.add(StandardMaterial {
-                base_color: Color::srgba(r, g, b, a),
-                metallic: node.metallic,
-                perceptual_roughness: node.roughness,
-                emissive: LinearRgba::new(er * 5.0, eg * 5.0, eb * 5.0, ea),
-                ..default()
-            });
-
-            let ec = commands.spawn((
+            let mut ec = commands.spawn((
                 Mesh3d(mesh_handle),
                 MeshMaterial3d(mat),
                 transform,
@@ -715,9 +780,29 @@ fn spawn_scene_node(
                 SceneRoot,
                 SceneEntity(node.id),
             ));
+
+            if play_mode {
+                use bevy_rapier3d::prelude::*;
+                let rigid_body = match node.physics_body {
+                    crate::model::PhysicsBodyType::Static => RigidBody::Fixed,
+                    crate::model::PhysicsBodyType::Dynamic => RigidBody::Dynamic,
+                    crate::model::PhysicsBodyType::Kinematic => RigidBody::KinematicPositionBased,
+                    crate::model::PhysicsBodyType::None => RigidBody::Fixed,
+                };
+                let collider = match node.collider_shape {
+                    crate::model::ColliderShape::Sphere => Collider::ball(node.scale[0] * 0.5),
+                    crate::model::ColliderShape::Capsule => Collider::capsule_y(node.scale[1] * 0.5, node.scale[0] * 0.5),
+                    crate::model::ColliderShape::Cylinder => Collider::cylinder(node.scale[1] * 0.5, node.scale[0] * 0.5),
+                    _ => Collider::cuboid(node.scale[0] * 0.5, node.scale[1] * 0.5, node.scale[2] * 0.5),
+                };
+                if node.physics_body != crate::model::PhysicsBodyType::None {
+                    ec.insert((rigid_body, collider));
+                }
+            }
+
             let entity_id = ec.id();
             for child in &node.children {
-                spawn_scene_child(commands, meshes, materials, child, entity_id, selected);
+                spawn_scene_child(commands, meshes, materials, child, entity_id, selected, asset_server, play_mode);
             }
         }
         SceneNodeKind::Light(light_kind) => {
@@ -762,6 +847,51 @@ fn spawn_scene_node(
                     ));
                 }
             }
+            let entity_id = commands.spawn(()).id(); // dummy, not used
+            for child in &node.children {
+                spawn_scene_child(commands, meshes, materials, child, entity_id, selected, asset_server, play_mode);
+            }
+        }
+        SceneNodeKind::Model(ref model_path) => {
+            let path_owned = model_path.clone();
+            let scene_handle: Handle<bevy::scene::Scene> = asset_server.load(
+                GltfAssetLabel::Scene(0).from_asset(path_owned),
+            );
+            let ec = commands.spawn((
+                bevy::scene::SceneRoot(scene_handle),
+                transform,
+                vis,
+                SceneRoot,
+                SceneEntity(node.id),
+            ));
+            let entity_id = ec.id();
+            for child in &node.children {
+                spawn_scene_child(commands, meshes, materials, child, entity_id, selected, asset_server, play_mode);
+            }
+        }
+        SceneNodeKind::Camera => {
+            let ec = commands.spawn((
+                transform,
+                vis,
+                SceneRoot,
+                SceneEntity(node.id),
+            ));
+            let entity_id = ec.id();
+            for child in &node.children {
+                spawn_scene_child(commands, meshes, materials, child, entity_id, selected, asset_server, play_mode);
+            }
+        }
+        SceneNodeKind::AudioSource(_) => {
+            let ec = commands.spawn((
+                transform,
+                vis,
+                SceneRoot,
+                SceneEntity(node.id),
+            ));
+            let entity_id = ec.id();
+            for child in &node.children {
+                spawn_scene_child(commands, meshes, materials, child, entity_id, selected, asset_server, play_mode);
+            }
         }
     }
 }
@@ -773,6 +903,8 @@ fn spawn_scene_child(
     node: &SceneNode,
     parent: Entity,
     selected: Option<u64>,
+    asset_server: &Res<AssetServer>,
+    play_mode: bool,
 ) {
     let [rx, ry, rz] = node.rotation_euler;
     let rotation = Quat::from_euler(
@@ -797,15 +929,7 @@ fn spawn_scene_child(
         }
         SceneNodeKind::Mesh(primitive) => {
             let mesh_handle = mesh_for_primitive(meshes, primitive);
-            let [r, g, b, a] = node.color;
-            let [er, eg, eb, ea] = node.emissive;
-            let mat = materials.add(StandardMaterial {
-                base_color: Color::srgba(r, g, b, a),
-                metallic: node.metallic,
-                perceptual_roughness: node.roughness,
-                emissive: LinearRgba::new(er * 5.0, eg * 5.0, eb * 5.0, ea),
-                ..default()
-            });
+            let mat = material_for_node(materials, node);
             commands.entity(parent).with_children(|cb| {
                 child_entity = cb.spawn((
                     Mesh3d(mesh_handle), MeshMaterial3d(mat), transform, vis, SceneEntity(node.id),
@@ -838,10 +962,32 @@ fn spawn_scene_child(
                 }
             });
         }
+        SceneNodeKind::Model(ref model_path) => {
+            let path_owned = model_path.clone();
+            let scene_handle: Handle<bevy::scene::Scene> = asset_server.load(
+                GltfAssetLabel::Scene(0).from_asset(path_owned),
+            );
+            commands.entity(parent).with_children(|cb| {
+                child_entity = cb.spawn((
+                    bevy::scene::SceneRoot(scene_handle),
+                    transform, vis, SceneEntity(node.id),
+                )).id();
+            });
+        }
+        SceneNodeKind::Camera => {
+            commands.entity(parent).with_children(|cb| {
+                child_entity = cb.spawn((transform, vis, SceneEntity(node.id))).id();
+            });
+        }
+        SceneNodeKind::AudioSource(_) => {
+            commands.entity(parent).with_children(|cb| {
+                child_entity = cb.spawn((transform, vis, SceneEntity(node.id))).id();
+            });
+        }
     }
 
     for grandchild in &node.children {
-        spawn_scene_child(commands, meshes, materials, grandchild, child_entity, selected);
+        spawn_scene_child(commands, meshes, materials, grandchild, child_entity, selected, asset_server, play_mode);
     }
 }
 
@@ -986,6 +1132,91 @@ pub fn selection_gizmo_system(
     }
 }
 
+// ─── Node type gizmos (camera frustum, audio radius) ──────────────────────────
+
+pub fn node_type_gizmo_system(
+    mut gizmos: Gizmos,
+    scene_entities: Query<(&SceneEntity, &GlobalTransform)>,
+    document: Res<SceneDocument>,
+    editor: Res<EditorState>,
+    selection: Res<SceneSelection>,
+) {
+    if editor.play_mode { return; }
+
+    for (scene_ent, global_tf) in &scene_entities {
+        let Some(node) = document.find_node(scene_ent.0) else { continue };
+        if !node.visible { continue; }
+        let pos = global_tf.translation();
+        let is_selected = selection.selected == Some(scene_ent.0);
+
+        match &node.kind {
+            SceneNodeKind::Camera => {
+                // Draw camera frustum wireframe
+                let alpha = if is_selected { 0.9 } else { 0.5 };
+                let color = Color::srgba(0.7, 0.4, 1.0, alpha);
+                let rotation = global_tf.compute_transform().rotation;
+                let fwd = rotation * -Vec3::Z;
+                let up = rotation * Vec3::Y;
+                let right = rotation * Vec3::X;
+
+                let near = 0.3_f32;
+                let far = 2.0_f32;
+                let aspect = 16.0 / 9.0_f32;
+                let half_fov = (node.fov * 0.5).to_radians();
+                let hn = near * half_fov.tan();
+                let wn = hn * aspect;
+                let hf = far * half_fov.tan();
+                let wf = hf * aspect;
+
+                let nc = pos + fwd * near;
+                let fc = pos + fwd * far;
+
+                let ntl = nc + up * hn - right * wn;
+                let ntr = nc + up * hn + right * wn;
+                let nbl = nc - up * hn - right * wn;
+                let nbr = nc - up * hn + right * wn;
+                let ftl = fc + up * hf - right * wf;
+                let ftr = fc + up * hf + right * wf;
+                let fbl = fc - up * hf - right * wf;
+                let fbr = fc - up * hf + right * wf;
+
+                // Near plane
+                gizmos.line(ntl, ntr, color);
+                gizmos.line(ntr, nbr, color);
+                gizmos.line(nbr, nbl, color);
+                gizmos.line(nbl, ntl, color);
+                // Far plane
+                gizmos.line(ftl, ftr, color);
+                gizmos.line(ftr, fbr, color);
+                gizmos.line(fbr, fbl, color);
+                gizmos.line(fbl, ftl, color);
+                // Edges
+                gizmos.line(ntl, ftl, color);
+                gizmos.line(ntr, ftr, color);
+                gizmos.line(nbl, fbl, color);
+                gizmos.line(nbr, fbr, color);
+            }
+            SceneNodeKind::AudioSource(_) => {
+                // Draw audio range sphere
+                let alpha = if is_selected { 0.5 } else { 0.25 };
+                let color = Color::srgba(0.3, 0.8, 0.3, alpha);
+                let radius = 1.5;
+                // Draw 3 circles (XY, XZ, YZ planes)
+                gizmos.circle(Isometry3d::from_translation(pos), radius, color);
+                gizmos.circle(
+                    Isometry3d::new(pos, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+                    radius, color,
+                );
+                gizmos.circle(
+                    Isometry3d::new(pos, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)),
+                    radius, color,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
 // ─── Grid gizmo ───────────────────────────────────────────────────────────────
 
 pub fn grid_gizmo_system(mut gizmos: Gizmos, editor: Res<EditorState>) {
@@ -1095,6 +1326,33 @@ pub fn keyboard_shortcuts_system(
                 changed.dirty = true;
                 console.info("Duplicated node");
             }
+        }
+    }
+
+    // Ctrl+C = copy
+    if ctrl && keys.just_pressed(KeyCode::KeyC) {
+        if let Some(sel) = selection.selected {
+            if let Some(node) = doc.find_node(sel) {
+                editor.clipboard = Some(node.clone());
+                console.info(format!("Copied {}", node.name));
+            }
+        }
+    }
+
+    // Ctrl+V = paste
+    if ctrl && keys.just_pressed(KeyCode::KeyV) {
+        if let Some(ref clip) = editor.clipboard.clone() {
+            let mut pasted = clip.clone();
+            pasted.id = pasted.id.wrapping_add(20000);
+            pasted.name = format!("{} (pasted)", clip.name);
+            pasted.translation[0] += 1.0;
+            let new_id = pasted.id;
+            reassign_ids_recursive(&mut pasted, new_id);
+            undo.push_snapshot(&doc.nodes);
+            doc.add_node(selection.selected, pasted);
+            selection.selected = Some(new_id);
+            changed.dirty = true;
+            console.info("Pasted node");
         }
     }
 

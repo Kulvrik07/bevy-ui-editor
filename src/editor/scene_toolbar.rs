@@ -7,6 +7,7 @@ use crate::model::{
     SceneLightKind, SceneNodeKind, ScenePrimitive, SceneSelection, TransformMode, UndoHistory,
 };
 
+use super::file_explorer::FileExplorerState;
 use super::launcher::{AppMode, AppModeRes};
 use super::viewport3d::OrbitState;
 
@@ -21,6 +22,7 @@ pub fn scene_toolbar_system(
     mut console: ResMut<ConsoleLog>,
     mut orbit: ResMut<OrbitState>,
     app_mode: Res<AppModeRes>,
+    file_explorer: Res<FileExplorerState>,
 ) {
     if app_mode.mode != AppMode::Editor { return; }
     let Ok(egui_ctx) = ctx.ctx_mut() else { return };
@@ -79,6 +81,11 @@ pub fn scene_toolbar_system(
                     }
                     if ui.button("💾 Save As...").clicked() {
                         save_scene_as(&doc, &mut editor, &mut console);
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("📦 Export Project").clicked() {
+                        export_project_action(&doc, &file_explorer, &mut console);
                         ui.close();
                     }
                     ui.separator();
@@ -150,6 +157,28 @@ pub fn scene_toolbar_system(
                     changed.dirty = true;
                     editor.scene_dirty = true;
                     console.info("Added Empty node");
+                }
+
+                if ui.button(RichText::new("+ Camera").size(13.0)).clicked() {
+                    let id = id_counter.next_id();
+                    let node = new_scene_node(id, SceneNodeKind::Camera);
+                    undo.push_snapshot(&doc.nodes);
+                    doc.add_node(selection.selected, node);
+                    selection.selected = Some(id);
+                    changed.dirty = true;
+                    editor.scene_dirty = true;
+                    console.info("Added Camera");
+                }
+
+                if ui.button(RichText::new("+ Audio").size(13.0)).clicked() {
+                    let id = id_counter.next_id();
+                    let node = new_scene_node(id, SceneNodeKind::AudioSource(String::new()));
+                    undo.push_snapshot(&doc.nodes);
+                    doc.add_node(selection.selected, node);
+                    selection.selected = Some(id);
+                    changed.dirty = true;
+                    editor.scene_dirty = true;
+                    console.info("Added AudioSource");
                 }
 
                 ui.separator();
@@ -253,6 +282,13 @@ pub fn scene_toolbar_system(
                     editor.show_stats = !editor.show_stats;
                 }
 
+                let snap_text = if editor.snap_enabled { "Snap ✓" } else { "Snap" };
+                if ui.button(RichText::new(snap_text).size(12.0)).on_hover_text(
+                    format!("Snap to grid (T:{} R:{}° S:{})", editor.snap_translate, editor.snap_rotate, editor.snap_scale)
+                ).clicked() {
+                    editor.snap_enabled = !editor.snap_enabled;
+                }
+
                 // ── Spacer ────────────────────────────────────────────
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // ── Play button ───────────────────────────────────
@@ -265,6 +301,7 @@ pub fn scene_toolbar_system(
                         // Save orbit state and enter play mode
                         editor.saved_orbit = Some((orbit.yaw, orbit.pitch, orbit.distance, orbit.focus.to_array()));
                         editor.play_mode = true;
+                        changed.dirty = true; // Ensure scene re-syncs for physics
                         console.info("Entered play mode — WASD to move, RMB+Mouse to look, Esc to stop");
                     }
 
@@ -320,5 +357,35 @@ fn save_scene_as(doc: &SceneDocument, editor: &mut EditorState, console: &mut Co
             Err(e) => console.error(format!("Save failed: {e}")),
         },
         Err(e) => console.error(format!("Serialization failed: {e}")),
+    }
+}
+
+fn export_project_action(
+    doc: &SceneDocument,
+    file_explorer: &FileExplorerState,
+    console: &mut ConsoleLog,
+) {
+    let project_root = &file_explorer.root;
+    let output_dir = project_root.join("build");
+
+    console.info(format!("Exporting project to {}", output_dir.display()));
+
+    let result = crate::export::export_project(doc, project_root, &output_dir);
+
+    if result.errors.is_empty() {
+        console.info(format!(
+            "✅ Project exported to {}\n  → cd {} && cargo run",
+            result.output_dir.display(),
+            result.output_dir.display()
+        ));
+    } else {
+        for err in &result.errors {
+            console.warn(format!("Export warning: {err}"));
+        }
+        console.info(format!(
+            "⚠ Project exported with {} warning(s) to {}",
+            result.errors.len(),
+            result.output_dir.display()
+        ));
     }
 }

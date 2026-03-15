@@ -11,7 +11,7 @@ use bevy_camera::ClearColorConfig;
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 
 use crate::model::{
-    ConsoleLog, DragDropState, EditorState, SceneChanged, SceneDocument,
+    ConsoleLog, DragDropState, EditorState, EnvironmentSettings, SceneChanged, SceneDocument,
     SceneIdCounter, SceneSelection, UndoHistory,
 };
 
@@ -24,6 +24,7 @@ use self::{
     scene_toolbar::scene_toolbar_system,
     viewport3d::{
         camera_orbit_system, grid_gizmo_system, keyboard_shortcuts_system,
+        node_type_gizmo_system,
         scene_sync_system, selection_gizmo_system,
         viewport_info_system, viewport_interact_system, viewport_rect_system,
         apply_viewport_rect_system, play_mode_camera_system,
@@ -59,6 +60,7 @@ impl Plugin for EditorPlugin {
             .init_resource::<ConsoleLog>()
             .init_resource::<DragDropState>()
             .init_resource::<FileExplorerState>()
+            .init_resource::<EnvironmentSettings>()
             // All egui systems in one chain (each checks mode internally)
             .add_systems(
                 EguiPrimaryContextPass,
@@ -81,6 +83,7 @@ impl Plugin for EditorPlugin {
                 camera_orbit_system,
                 scene_sync_system,
                 selection_gizmo_system,
+                node_type_gizmo_system,
                 grid_gizmo_system,
                 keyboard_shortcuts_system,
                 viewport_interact_system,
@@ -136,6 +139,7 @@ fn init_editor_on_transition(
     if let Some(project_path) = &chosen.path {
         let path = std::path::PathBuf::from(project_path);
         file_explorer.root = path.clone();
+        file_explorer.current_dir = path.clone();
         file_explorer.needs_refresh = true;
 
         // Auto-load scene.json if it exists

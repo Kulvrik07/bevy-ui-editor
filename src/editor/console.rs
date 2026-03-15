@@ -21,15 +21,20 @@ pub fn console_panel_system(
     }
 
     egui::TopBottomPanel::bottom("console_panel")
-        .default_height(120.0)
-        .min_height(60.0)
-        .max_height(300.0)
+        .default_height(100.0)
+        .height_range(40.0..=300.0)
+        .resizable(true)
+        .show_separator_line(true)
         .frame(Frame {
             fill: Color32::from_rgb(25, 25, 25),
-            inner_margin: Margin::same(0),
+            inner_margin: Margin::symmetric(0, 2),
             ..Default::default()
         })
         .show(egui_ctx, |ui| {
+            // Claim full available height so the panel stores the correct
+            // resized rect and doesn't snap back to content size.
+            ui.set_min_height(ui.available_height());
+
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.add_space(8.0);

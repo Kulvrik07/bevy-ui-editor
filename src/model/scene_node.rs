@@ -65,11 +65,119 @@ impl fmt::Display for SceneLightKind {
 
 // ─── Node kind ────────────────────────────────────────────────────────────────
 
+// ─── Camera projection ────────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum SceneProjection {
+    Perspective,
+    Orthographic,
+}
+
+impl Default for SceneProjection {
+    fn default() -> Self { SceneProjection::Perspective }
+}
+
+impl fmt::Display for SceneProjection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SceneProjection::Perspective => write!(f, "Perspective"),
+            SceneProjection::Orthographic => write!(f, "Orthographic"),
+        }
+    }
+}
+
+// ─── Alpha mode ───────────────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum SceneAlphaMode {
+    Opaque,
+    Blend,
+    Mask,
+    AlphaToCoverage,
+}
+
+impl Default for SceneAlphaMode {
+    fn default() -> Self { SceneAlphaMode::Opaque }
+}
+
+impl fmt::Display for SceneAlphaMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SceneAlphaMode::Opaque => write!(f, "Opaque"),
+            SceneAlphaMode::Blend => write!(f, "Blend"),
+            SceneAlphaMode::Mask => write!(f, "Mask"),
+            SceneAlphaMode::AlphaToCoverage => write!(f, "AlphaToCoverage"),
+        }
+    }
+}
+
+// ─── Physics body type ────────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum PhysicsBodyType {
+    None,
+    Static,
+    Dynamic,
+    Kinematic,
+}
+
+impl Default for PhysicsBodyType {
+    fn default() -> Self { PhysicsBodyType::None }
+}
+
+impl fmt::Display for PhysicsBodyType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PhysicsBodyType::None => write!(f, "None"),
+            PhysicsBodyType::Static => write!(f, "Static"),
+            PhysicsBodyType::Dynamic => write!(f, "Dynamic"),
+            PhysicsBodyType::Kinematic => write!(f, "Kinematic"),
+        }
+    }
+}
+
+// ─── Collider shape ───────────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ColliderShape {
+    None,
+    Box,
+    Sphere,
+    Capsule,
+    Cylinder,
+    Auto,
+}
+
+impl Default for ColliderShape {
+    fn default() -> Self { ColliderShape::None }
+}
+
+impl fmt::Display for ColliderShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ColliderShape::None => write!(f, "None"),
+            ColliderShape::Box => write!(f, "Box"),
+            ColliderShape::Sphere => write!(f, "Sphere"),
+            ColliderShape::Capsule => write!(f, "Capsule"),
+            ColliderShape::Cylinder => write!(f, "Cylinder"),
+            ColliderShape::Auto => write!(f, "Auto (from mesh)"),
+        }
+    }
+}
+
+// ─── Node kind ────────────────────────────────────────────────────────────────
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum SceneNodeKind {
     Empty,
     Mesh(ScenePrimitive),
     Light(SceneLightKind),
+    /// Imported 3D model (GLTF/GLB). Stores asset path relative to project assets/ dir.
+    Model(String),
+    /// Camera node
+    Camera,
+    /// Audio source node (stores asset path)
+    AudioSource(String),
 }
 
 impl Default for SceneNodeKind {
@@ -84,8 +192,31 @@ impl fmt::Display for SceneNodeKind {
             SceneNodeKind::Empty => write!(f, "Empty"),
             SceneNodeKind::Mesh(p) => write!(f, "Mesh ({p})"),
             SceneNodeKind::Light(l) => write!(f, "Light ({l})"),
+            SceneNodeKind::Model(path) => {
+                let name = std::path::Path::new(path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "Model".into());
+                write!(f, "Model ({name})")
+            }
+            SceneNodeKind::Camera => write!(f, "Camera"),
+            SceneNodeKind::AudioSource(path) => {
+                let name = std::path::Path::new(path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "Audio".into());
+                write!(f, "Audio ({name})")
+            }
         }
     }
+}
+
+// ─── Script reference ─────────────────────────────────────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ScriptRef {
+    pub path: String,
+    pub enabled: bool,
 }
 
 // ─── Scene node ───────────────────────────────────────────────────────────────
@@ -113,7 +244,86 @@ pub struct SceneNode {
     pub spot_angle: f32,
 
     pub visible: bool,
+
+    // ── Material extras ───────────────────────────────────────────
+    #[serde(default)]
+    pub alpha_mode: SceneAlphaMode,
+    #[serde(default = "default_alpha_cutoff")]
+    pub alpha_cutoff: f32,
+    #[serde(default)]
+    pub unlit: bool,
+    #[serde(default)]
+    pub double_sided: bool,
+    /// Texture asset path (relative to project assets/)
+    #[serde(default)]
+    pub texture_path: String,
+    /// Normal map path
+    #[serde(default)]
+    pub normal_map_path: String,
+
+    // ── Render settings ──────────────────────────────────────────
+    #[serde(default = "default_true")]
+    pub cast_shadows: bool,
+    #[serde(default = "default_true")]
+    pub receive_shadows: bool,
+    #[serde(default)]
+    pub render_layer: u8,
+
+    // ── Camera properties ────────────────────────────────────────
+    #[serde(default)]
+    pub projection: SceneProjection,
+    #[serde(default = "default_fov")]
+    pub fov: f32,
+    #[serde(default = "default_near")]
+    pub near_clip: f32,
+    #[serde(default = "default_far")]
+    pub far_clip: f32,
+    #[serde(default)]
+    pub hdr: bool,
+    #[serde(default)]
+    pub is_active_camera: bool,
+
+    // ── Audio properties ─────────────────────────────────────────
+    #[serde(default = "default_volume")]
+    pub audio_volume: f32,
+    #[serde(default)]
+    pub audio_looping: bool,
+    #[serde(default)]
+    pub audio_spatial: bool,
+    #[serde(default)]
+    pub audio_autoplay: bool,
+
+    // ── Physics ──────────────────────────────────────────────────
+    #[serde(default)]
+    pub physics_body: PhysicsBodyType,
+    #[serde(default)]
+    pub collider_shape: ColliderShape,
+    #[serde(default = "default_mass")]
+    pub mass: f32,
+    #[serde(default = "default_friction")]
+    pub friction: f32,
+    #[serde(default = "default_restitution")]
+    pub restitution: f32,
+    #[serde(default)]
+    pub lock_rotation: bool,
+    #[serde(default = "default_gravity_scale")]
+    pub gravity_scale: f32,
+
+    /// Script files attached to this node (paths relative to project root)
+    #[serde(default)]
+    pub scripts: Vec<ScriptRef>,
 }
+
+fn default_true() -> bool { true }
+fn default_fov() -> f32 { 60.0 }
+fn default_near() -> f32 { 0.1 }
+fn default_far() -> f32 { 1000.0 }
+fn default_volume() -> f32 { 1.0 }
+fn default_mass() -> f32 { 1.0 }
+fn default_friction() -> f32 { 0.5 }
+fn default_restitution() -> f32 { 0.0 }
+fn default_alpha_cutoff() -> f32 { 0.5 }
+fn default_gravity_scale() -> f32 { 1.0 }
 
 impl Default for SceneNode {
     fn default() -> Self {
@@ -135,6 +345,39 @@ impl Default for SceneNode {
             light_shadows: true,
             spot_angle: 45.0,
             visible: true,
+            // Material extras
+            alpha_mode: SceneAlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            unlit: false,
+            double_sided: false,
+            texture_path: String::new(),
+            normal_map_path: String::new(),
+            // Render
+            cast_shadows: true,
+            receive_shadows: true,
+            render_layer: 0,
+            // Camera
+            projection: SceneProjection::Perspective,
+            fov: 60.0,
+            near_clip: 0.1,
+            far_clip: 1000.0,
+            hdr: false,
+            is_active_camera: false,
+            // Audio
+            audio_volume: 1.0,
+            audio_looping: false,
+            audio_spatial: false,
+            audio_autoplay: false,
+            // Physics
+            physics_body: PhysicsBodyType::None,
+            collider_shape: ColliderShape::None,
+            mass: 1.0,
+            friction: 0.5,
+            restitution: 0.0,
+            lock_rotation: false,
+            gravity_scale: 1.0,
+            // Scripts
+            scripts: Vec::new(),
         }
     }
 }
@@ -146,6 +389,19 @@ pub fn new_scene_node(id: u64, kind: SceneNodeKind) -> SceneNode {
         SceneNodeKind::Empty => "Empty".to_string(),
         SceneNodeKind::Mesh(p) => p.to_string(),
         SceneNodeKind::Light(l) => format!("{l} Light"),
+        SceneNodeKind::Model(path) => {
+            std::path::Path::new(path)
+                .file_stem()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Model".into())
+        }
+        SceneNodeKind::Camera => "Camera".to_string(),
+        SceneNodeKind::AudioSource(path) => {
+            std::path::Path::new(path)
+                .file_stem()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Audio".into())
+        }
     };
     let mut node = SceneNode {
         id,
@@ -191,6 +447,15 @@ pub fn new_scene_node(id: u64, kind: SceneNodeKind) -> SceneNode {
             node.translation = [0.0, 5.0, 0.0];
             node.rotation_euler = [-90.0, 0.0, 0.0];
             node.light_intensity = 1000.0;
+        }
+        SceneNodeKind::Camera => {
+            node.translation = [8.0, 6.0, 8.0];
+            node.rotation_euler = [-25.0, 45.0, 0.0];
+            node.is_active_camera = true;
+        }
+        SceneNodeKind::AudioSource(_) => {
+            node.audio_autoplay = true;
+            node.audio_spatial = true;
         }
         _ => {}
     }
@@ -325,6 +590,15 @@ pub struct EditorState {
     pub show_stats: bool,
     pub play_mode: bool,
     pub saved_orbit: Option<(f32, f32, f32, [f32; 3])>,
+    // Snap
+    pub snap_enabled: bool,
+    pub snap_translate: f32,
+    pub snap_rotate: f32,
+    pub snap_scale: f32,
+    // Hierarchy search
+    pub hierarchy_filter: String,
+    // Clipboard for copy/paste
+    pub clipboard: Option<SceneNode>,
 }
 
 impl Default for EditorState {
@@ -337,6 +611,12 @@ impl Default for EditorState {
             show_stats: true,
             play_mode: false,
             saved_orbit: None,
+            snap_enabled: false,
+            snap_translate: 1.0,
+            snap_rotate: 15.0,
+            snap_scale: 0.25,
+            hierarchy_filter: String::new(),
+            clipboard: None,
         }
     }
 }
@@ -397,6 +677,74 @@ impl ConsoleLog {
 
     pub fn error(&mut self, msg: impl Into<String>) {
         self.log(LogLevel::Error, msg);
+    }
+}
+
+// ─── Environment settings ─────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ToneMapping {
+    None,
+    Reinhard,
+    ReinhardLuminance,
+    AcesFitted,
+    AgX,
+    SomewhatBoringDisplayTransform,
+    TonyMcMapface,
+    BlenderFilmic,
+}
+
+impl Default for ToneMapping {
+    fn default() -> Self { ToneMapping::TonyMcMapface }
+}
+
+impl fmt::Display for ToneMapping {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ToneMapping::None => write!(f, "None"),
+            ToneMapping::Reinhard => write!(f, "Reinhard"),
+            ToneMapping::ReinhardLuminance => write!(f, "ReinhardLuminance"),
+            ToneMapping::AcesFitted => write!(f, "AcesFitted"),
+            ToneMapping::AgX => write!(f, "AgX"),
+            ToneMapping::SomewhatBoringDisplayTransform => write!(f, "SomewhatBoringDisplayTransform"),
+            ToneMapping::TonyMcMapface => write!(f, "TonyMcMapface"),
+            ToneMapping::BlenderFilmic => write!(f, "BlenderFilmic"),
+        }
+    }
+}
+
+#[derive(Resource, Clone, Debug, Serialize, Deserialize)]
+pub struct EnvironmentSettings {
+    pub clear_color: [f32; 4],
+    pub ambient_color: [f32; 4],
+    pub ambient_brightness: f32,
+    pub fog_enabled: bool,
+    pub fog_color: [f32; 4],
+    pub fog_start: f32,
+    pub fog_end: f32,
+    pub fog_density: f32,
+    pub bloom_enabled: bool,
+    pub bloom_intensity: f32,
+    pub bloom_threshold: f32,
+    pub tone_mapping: ToneMapping,
+}
+
+impl Default for EnvironmentSettings {
+    fn default() -> Self {
+        EnvironmentSettings {
+            clear_color: [0.1, 0.1, 0.12, 1.0],
+            ambient_color: [1.0, 1.0, 1.0, 1.0],
+            ambient_brightness: 0.1,
+            fog_enabled: false,
+            fog_color: [0.5, 0.5, 0.6, 1.0],
+            fog_start: 10.0,
+            fog_end: 80.0,
+            fog_density: 0.01,
+            bloom_enabled: false,
+            bloom_intensity: 0.15,
+            bloom_threshold: 1.0,
+            tone_mapping: ToneMapping::TonyMcMapface,
+        }
     }
 }
 

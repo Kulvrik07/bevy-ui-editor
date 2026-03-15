@@ -1,3 +1,3 @@
-pub mod rust_codegen;
+pub mod scene_codegen;
 
-pub use rust_codegen::*;
+pub use scene_codegen::*;

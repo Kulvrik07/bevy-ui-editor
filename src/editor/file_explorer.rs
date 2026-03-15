@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Color32, Frame, Margin, RichText, Rounding, ScrollArea, Sense, Stroke, Vec2};
+use bevy_egui::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, ScrollArea, Sense, Stroke, Vec2};
 use bevy_egui::EguiContexts;
 
-use crate::model::{ConsoleLog, EditorState, SceneChanged, SceneDocument, UndoHistory};
+use crate::model::{ConsoleLog, EditorState, SceneChanged, SceneDocument, SceneIdCounter, SceneNodeKind, SceneSelection, ScriptRef, UndoHistory, new_scene_node};
 
 // ─── Resource ─────────────────────────────────────────────────────────────────
 
@@ -192,6 +192,8 @@ pub fn file_explorer_system(
     mut changed: ResMut<SceneChanged>,
     mut undo: ResMut<UndoHistory>,
     mut console: ResMut<ConsoleLog>,
+    mut id_counter: ResMut<SceneIdCounter>,
+    selection: Res<SceneSelection>,
     app_mode: Res<super::launcher::AppModeRes>,
 ) {
     if app_mode.mode != super::launcher::AppMode::Editor { return; }
@@ -215,16 +217,20 @@ pub fn file_explorer_system(
     let mut navigate_to: Option<PathBuf> = None;
 
     egui::TopBottomPanel::bottom("file_explorer")
-        .default_height(180.0)
-        .min_height(80.0)
-        .max_height(500.0)
+        .default_height(220.0)
+        .height_range(60.0..=500.0)
         .resizable(true)
+        .show_separator_line(true)
         .frame(Frame {
             fill: BG_DARK,
-            inner_margin: Margin::same(0),
+            inner_margin: Margin::symmetric(0, 2),
             ..Default::default()
         })
         .show(egui_ctx, |ui| {
+            // Claim full available height so the panel stores the correct
+            // resized rect and doesn't snap back to content size.
+            ui.set_min_height(ui.available_height());
+
             // ── Toolbar with breadcrumbs ──────────────────────────────
             ui.horizontal(|ui| {
                 ui.add_space(6.0);
@@ -279,12 +285,13 @@ pub fn file_explorer_system(
 
             // ── Two-pane layout ──────────────────────────────────────
             let available = ui.available_rect_before_wrap();
+            let pane_height = available.height();
             let tree_width = 180.0_f32.min(available.width() * 0.3);
 
             ui.horizontal(|ui| {
                 // ── LEFT: Folder tree ────────────────────────────────
                 ui.allocate_ui_with_layout(
-                    egui::Vec2::new(tree_width, ui.available_height()),
+                    egui::Vec2::new(tree_width, pane_height),
                     egui::Layout::top_down(egui::Align::LEFT),
                     |ui| {
                         ui.set_min_width(tree_width);
@@ -386,6 +393,10 @@ pub fn file_explorer_system(
                                         action = Some(ExplorerAction::NewSceneFile(folder.path.clone()));
                                         ui.close();
                                     }
+                                    if ui.button("📜 New Script").clicked() {
+                                        action = Some(ExplorerAction::NewScript(folder.path.clone()));
+                                        ui.close();
+                                    }
                                 });
                             }
 
@@ -428,7 +439,10 @@ pub fn file_explorer_system(
                 );
 
                 // ── RIGHT: File content grid ─────────────────────────
-                ui.vertical(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::Vec2::new(ui.available_width(), pane_height),
+                    egui::Layout::top_down(egui::Align::LEFT),
+                    |ui| {
                     let right_bg = ui.available_rect_before_wrap();
                     ui.painter().rect_filled(right_bg, 0.0, BG_DARK);
 
@@ -469,9 +483,9 @@ pub fn file_explorer_system(
                     ScrollArea::vertical().id_salt("content_scroll").show(ui, |ui| {
                         ui.add_space(4.0);
                         let content_width = ui.available_width();
-                        let item_width = 72.0_f32;
-                        let item_height = 80.0_f32;
-                        let spacing = 4.0;
+                        let item_width = 90.0_f32;
+                        let item_height = 92.0_f32;
+                        let spacing = 6.0;
                         let cols = ((content_width - 8.0) / (item_width + spacing)).max(1.0) as usize;
 
                         let contents_clone = state.dir_contents.clone();
@@ -499,27 +513,27 @@ pub fn file_explorer_system(
                                     } else {
                                         Color32::TRANSPARENT
                                     };
-                                    ui.painter().rect_filled(rect, Rounding::same(4), bg);
+                                    ui.painter().rect_filled(rect, CornerRadius::same(4), bg);
 
                                     // Icon
                                     let (icon, icon_color) = file_icon_large(&entry.name, entry.is_dir);
                                     let icon_center = egui::Pos2::new(
                                         rect.center().x,
-                                        rect.top() + 28.0,
+                                        rect.top() + 30.0,
                                     );
                                     ui.painter().text(
                                         icon_center,
                                         egui::Align2::CENTER_CENTER,
                                         icon,
-                                        egui::FontId::proportional(22.0),
+                                        egui::FontId::proportional(24.0),
                                         icon_color,
                                     );
 
                                     // File name
                                     if is_renaming {
                                         let text_rect = egui::Rect::from_min_size(
-                                            egui::Pos2::new(rect.left() + 2.0, rect.top() + 48.0),
-                                            Vec2::new(item_width - 4.0, 28.0),
+                                            egui::Pos2::new(rect.left() + 2.0, rect.top() + 54.0),
+                                            Vec2::new(item_width - 4.0, 32.0),
                                         );
                                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_rect));
                                         let resp = child.add(
@@ -544,8 +558,8 @@ pub fn file_explorer_system(
                                         }
                                         resp.request_focus();
                                     } else {
-                                        let display_name = if entry.name.len() > 14 {
-                                            format!("{}…", &entry.name[..13])
+                                        let display_name = if entry.name.len() > 12 {
+                                            format!("{}…", &entry.name[..11])
                                         } else {
                                             entry.name.clone()
                                         };
@@ -558,13 +572,13 @@ pub fn file_explorer_system(
                                         };
                                         let name_pos = egui::Pos2::new(
                                             rect.center().x,
-                                            rect.top() + 56.0,
+                                            rect.top() + 60.0,
                                         );
                                         ui.painter().text(
                                             name_pos,
                                             egui::Align2::CENTER_TOP,
                                             &display_name,
-                                            egui::FontId::proportional(9.5),
+                                            egui::FontId::proportional(11.0),
                                             name_color,
                                         );
 
@@ -613,6 +627,30 @@ pub fn file_explorer_system(
                                             }
                                             ui.separator();
                                         }
+                                        // 3D model import
+                                        let ext = entry.name.rsplit('.').next().unwrap_or("").to_lowercase();
+                                        if matches!(ext.as_str(), "glb" | "gltf" | "fbx" | "obj") {
+                                            if ui.button("🎨 Import as 3D Model").clicked() {
+                                                action = Some(ExplorerAction::ImportModel(entry.path.clone()));
+                                                ui.close();
+                                            }
+                                            ui.separator();
+                                        }
+                                        // Script attachment
+                                        if matches!(ext.as_str(), "rs" | "lua" | "rhai" | "py" | "js" | "ts" | "wasm") {
+                                            if ui.button("📜 Attach as Script").clicked() {
+                                                action = Some(ExplorerAction::ImportScript(entry.path.clone()));
+                                                ui.close();
+                                            }
+                                            ui.separator();
+                                        }
+                                        // Copy to assets
+                                        if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "bmp" | "webp" | "hdr" | "wav" | "ogg" | "mp3" | "flac" | "glb" | "gltf" | "fbx" | "obj" | "svg") {
+                                            if ui.button("📦 Copy to Assets").clicked() {
+                                                action = Some(ExplorerAction::CopyToAssets(entry.path.clone()));
+                                                ui.close();
+                                            }
+                                        }
                                         if ui.button("✏  Rename").clicked() {
                                             action = Some(ExplorerAction::Rename(entry.path.clone(), entry.name.clone()));
                                             ui.close();
@@ -643,7 +681,11 @@ pub fn file_explorer_system(
                                 ui.close();
                             }
                             if ui.button("📄 New Scene File").clicked() {
-                                action = Some(ExplorerAction::NewSceneFile(cd));
+                                action = Some(ExplorerAction::NewSceneFile(cd.clone()));
+                                ui.close();
+                            }
+                            if ui.button("📜 New Script").clicked() {
+                                action = Some(ExplorerAction::NewScript(cd));
                                 ui.close();
                             }
                             if ui.button("🔄 Refresh").clicked() {
@@ -682,6 +724,52 @@ pub fn file_explorer_system(
                     Err(e) => console.error(format!("Failed to create file: {e}")),
                 }
             }
+            ExplorerAction::NewScript(parent) => {
+                // Create a scripts/ dir if needed, then create template
+                let scripts_dir = if parent.ends_with("scripts") {
+                    parent.clone()
+                } else {
+                    parent.join("scripts")
+                };
+                let _ = std::fs::create_dir_all(&scripts_dir);
+
+                // Find a unique name
+                let mut name = "new_script.rs".to_string();
+                let mut counter = 1u32;
+                while scripts_dir.join(&name).exists() {
+                    counter += 1;
+                    name = format!("new_script_{counter}.rs");
+                }
+                let file_path = scripts_dir.join(&name);
+                let pascal = to_pascal_case(&name.replace(".rs", ""));
+                let snake = name.replace(".rs", "");
+                let template = format!(
+                    "use bevy::prelude::*;\n\
+                     \n\
+                     /// Marker component — attached automatically to the entity in the scene.\n\
+                     #[derive(Component)]\n\
+                     pub struct {pascal};\n\
+                     \n\
+                     /// Runs every frame for each entity that has the `{pascal}` component.\n\
+                     pub fn {snake}_update(\n\
+                         time: Res<Time>,\n\
+                         mut query: Query<&mut Transform, With<{pascal}>>,\n\
+                     ) {{\n\
+                         for mut transform in &mut query {{\n\
+                             // Example: rotate around Y axis\n\
+                             transform.rotate_y(1.0 * time.delta_secs());\n\
+                         }}\n\
+                     }}\n",
+                );
+                match std::fs::write(&file_path, template) {
+                    Ok(()) => {
+                        console.info(format!("Created script: {}", file_path.display()));
+                        state.needs_refresh = true;
+                        state.needs_content_refresh = true;
+                    }
+                    Err(e) => console.error(format!("Failed to create script: {e}")),
+                }
+            }
             ExplorerAction::Rename(path, name) => {
                 state.rename_target = Some(path);
                 state.rename_buf = name;
@@ -698,6 +786,72 @@ pub fn file_explorer_system(
                         state.needs_refresh = true;
                     }
                     Err(e) => console.error(format!("Delete failed: {e}")),
+                }
+            }
+            ExplorerAction::ImportModel(path) => {
+                // Copy to assets/models/ and add a Model node to the scene
+                let assets_dir = state.root.join("assets").join("models");
+                let _ = std::fs::create_dir_all(&assets_dir);
+                let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let dest = assets_dir.join(&file_name);
+                if path != dest {
+                    match std::fs::copy(&path, &dest) {
+                        Ok(_) => console.info(format!("Copied to assets/models/{file_name}")),
+                        Err(e) => {
+                            console.error(format!("Failed to copy model: {e}"));
+                            return;
+                        }
+                    }
+                }
+                let asset_path = format!("models/{file_name}");
+                let id = id_counter.next_id();
+                let node = new_scene_node(id, SceneNodeKind::Model(asset_path));
+                undo.push_snapshot(&doc.nodes);
+                doc.add_node(None, node);
+                changed.dirty = true;
+                console.info(format!("Imported model: {file_name}"));
+                state.needs_refresh = true;
+            }
+            ExplorerAction::ImportScript(path) => {
+                // Attach script to the currently selected node
+                let rel_path = path.strip_prefix(&state.root)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| path.to_string_lossy().to_string());
+                if let Some(sel_id) = selection.selected {
+                    if let Some(node) = doc.find_node_mut(sel_id) {
+                        if !node.scripts.iter().any(|s| s.path == rel_path) {
+                            node.scripts.push(ScriptRef {
+                                path: rel_path.clone(),
+                                enabled: true,
+                            });
+                            changed.dirty = true;
+                            console.info(format!("Attached script '{}' to '{}'", rel_path, node.name));
+                        } else {
+                            console.warn(format!("Script '{}' already attached", rel_path));
+                        }
+                    }
+                } else {
+                    console.warn(format!("Select a node first, then attach script: {rel_path}"));
+                }
+            }
+            ExplorerAction::CopyToAssets(path) => {
+                let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+                let subdir = match ext.as_str() {
+                    "glb" | "gltf" | "fbx" | "obj" => "models",
+                    "png" | "jpg" | "jpeg" | "bmp" | "webp" | "hdr" | "svg" => "textures",
+                    "wav" | "ogg" | "mp3" | "flac" => "audio",
+                    _ => "misc",
+                };
+                let assets_dir = state.root.join("assets").join(subdir);
+                let _ = std::fs::create_dir_all(&assets_dir);
+                let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let dest = assets_dir.join(&file_name);
+                match std::fs::copy(&path, &dest) {
+                    Ok(_) => {
+                        console.info(format!("Copied to assets/{subdir}/{file_name}"));
+                        state.needs_refresh = true;
+                    }
+                    Err(e) => console.error(format!("Copy failed: {e}")),
                 }
             }
         }
@@ -753,6 +907,23 @@ fn build_folder_tree(root: &Path) -> Vec<FolderEntry> {
 enum ExplorerAction {
     NewFolder(PathBuf),
     NewSceneFile(PathBuf),
+    NewScript(PathBuf),
     Rename(PathBuf, String),
     Delete(PathBuf, bool),
+    ImportModel(PathBuf),
+    ImportScript(PathBuf),
+    CopyToAssets(PathBuf),
+}
+
+fn to_pascal_case(s: &str) -> String {
+    s.split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut chars = w.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().to_string() + &chars.as_str().to_lowercase(),
+                None => String::new(),
+            }
+        })
+        .collect()
 }

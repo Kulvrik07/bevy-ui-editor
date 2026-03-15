@@ -1,6 +1,9 @@
 use bevy::prelude::*;
 
+use bevy_rapier3d::prelude::*;
+
 mod editor;
+mod export;
 mod model;
 
 fn main() {
@@ -13,6 +16,8 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
+        .add_plugins(RapierDebugRenderPlugin::default()) // Show colliders
         .add_plugins(editor::EditorPlugin)
         .run();
 }
