@@ -29,3 +29,4 @@ The editor is built **in Bevy itself** using **`bevy_egui`** for the editor pane
 - **Spacing**: Padding, Margin, Border — each with 4 independent sides
 - **Visual**: Background Color, Border Color, Border Radius, Z-Index, Visibility
 - **Text**: Content, Font Size (8–120), Text Color
+
